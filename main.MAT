@@ -1,0 +1,346 @@
+function [ featuresVector ] = GenVisFeatVec(video, xDCTCropRatio, yDCTCropRatio, imgRescale, debugMethod)
+    xCropRatio = xDCTCropRatio;
+    yCropRatio = yDCTCropRatio;
+ 
+    nframes = get(video, 'NumberOfFrames');
+    featuresVector = createEmptyFeaturesVector(video, nframes, xCropRatio, yCropRatio, imgRescale);
+    
+    for frame = 1:(nframes)
+       
+        % Resize frame to be smaller
+        img = read(video, frame);
+        img = imresize(img, imgRescale);
+        
+        % Resize frame to be smaller
+        if(frame+1 < nframes)
+            nextImg = read(video, frame+1);
+            nextImg = imresize(nextImg, imgRescale);
+        else
+            nextImg = img;
+        end      
+        
+        %crops the mouth for the frame
+        RGBMouthFrame = getMouthBox(img, imgRescale);
+        RGBMouthNextFrame = getMouthBox(img, imgRescale);
+        
+%         PCAFeature = getPCAFeatureVector(RGBMouthFrame, RGBMouthNextFrame, debugMethod);
+        
+        %gets details from mouth
+        [croppedMouth, MouthWidth, MouthHeight, MouthArea, valCentroidX, ~] = findMouthValues(RGBMouthFrame, imgRescale, debugMethod);
+       
+        %gets the amount of tooth in the frame
+        TeethVal = GetTeethWhiteness(RGBMouthFrame, 0.56, debugMethod);
+        
+        %feature extraction and compression options)
+        DCTFeature = GetDCTFeatureVector(RGBMouthFrame, 1, xCropRatio, 1, yCropRatio, debugMethod);
+        
+        PCAFeature = GetFramePCAFeatureVector(RGBMouthFrame, debugMethod);
+        
+        PCA_DCTFeature = GetFramePCA_DCTFeatureVector(RGBMouthFrame, xCropRatio, yCropRatio, debugMethod);
+        
+        %format all features into 1D feature per frame ADD SUPPORT FOR PCA
+        frameFeatures = formatFrameFeaturesVector(DCTFeature, TeethVal, MouthWidth, MouthHeight, MouthArea, debugMethod);
+
+        %add to features vector
+        featuresVector(:,frame) = frameFeatures;
+
+    end
+end
+
+function [meanMouth] = GetMeanMouthImage(video, nframes, imgRescale)
+    temp = rgb2gray(getMouthBox(imresize(read(video, 1), imgRescale), imgRescale));
+    meanMouth = zeros(size(temp));
+
+    for frame = 1:nframes
+        image = rgb2gray(getMouthBox(imresize((read(video, frame)), imgRescale), imgRescale));
+        meanMouth = meanMouth + double(image);
+    end
+
+    meanMouth = meanMouth / nframes;
+end
+ 
+function [teethValue] = GetTeethWhiteness(RGB, threshold, debugMethod)
+       
+    % Convert to gray scale and create index of teeth pxls
+    I = rgb2gray(RGB);
+    teethVector = zeros(size(I));
+    teethVector(I > threshold) = 1;
+ 
+    teethValue = sum(teethVector);
+    teethValue = sum(teethValue); %for some reason first sum doesn't work...
+ 
+    if(strcmp(debugMethod, 'teeth'))
+        figure(1);
+        p1 = subplot(1,3,1), subimage(RGB), title('RGB Image');
+        p2 = subplot(1,3,2), subimage(teethVector), title('teeth Image');
+        p3 = subplot(1,3,3), text(0.5,0.5,num2str(teethValue)), axis off;
+        pause(0.01);
+        delete(p3);
+    end
+end
+ 
+function [clippedDCTImage] = GetDCTFeatureVector(RGBImg, xCropStart, xCropMaxRatio, yCropStart, yCropMaxRatio, debugMethod)
+   
+    %Generate DCT matrix
+    Image = rgb2gray(RGBImg);  
+    DCTImage = dct2(Image);
+   
+    %calculate size of DCT crop
+    [JXSize, JYSize] = size(DCTImage);
+    xCropEnd = floor((JXSize/100) * xCropMaxRatio);
+    yCropEnd = floor((JYSize/100) * yCropMaxRatio);
+   
+    %Generates cropped DCT feature
+    clippedDCTImage = DCTImage(xCropStart:xCropEnd, yCropStart:yCropEnd);
+           
+    if(strcmp(debugMethod, 'DCT'))
+        selection = zeros(size(DCTImage));
+        selection(xCropStart:xCropEnd, yCropStart:yCropEnd) = 1;
+        reformedImage = DCTImage .* selection;
+       
+        figure(1)
+        p1 = subplot(2,2,1), subimage(Image), title('Initial Image');
+        p2 = subplot(2,2,2), subimage(idct2(reformedImage*255), [0 255]), title('Reduced Image'); %*255 due to hsv converstion
+        p3 = subplot(2,2,3), subimage(DCTImage), title('DCT of Initial Image');
+        p4 = subplot(2,2,4), subimage(clippedDCTImage), title('clipped DCT');
+        pause(0.01);
+    end
+end
+
+function [ features ] = GetFramePCAFeatureVector(frame, debugMethod)
+    I = frame;
+    X = reshape(I,size(I,1)*size(I,2),3);
+    [evectors, score, evalues] = pca(X);
+
+    
+    if(strcmp(debugMethod, 'DCT'))
+        evectors
+    end
+
+    features = evectors;
+end
+
+
+% 2.3 DCT based Method
+% The objective of image fusion is to merge relevant
+% information from different images into a single composite
+% image. Methods based on DCT for image fusion are more
+% time-saving in real-time mechanisms by applying DCT based
+% standards of still image or video. Presently some methods
+% based on DCT are having unwanted issues such as blurring
+% or blocking artifacts which affects resultant image [2].
+% Additionally, some of these methods are rather complicated
+% and this challenge the concept of the principle used in DCT
+% based algorithms. In this method, a suitable technique based
+% on variance calculated in DCT domain for fusion of multifocus
+% images is conducted. Due to easy accessibility of this
+% approach it offers high degree of reliability in real-time
+% applications [6]. The resultant outcome verifies the efficiency
+% improvement of this technique in contrast with numerous
+% recent proposed techniques.
+
+% 2.4 PCA based Method
+% In this method, hierarchical PCA algorithm is used for fusion.
+% Image fusion is a method of merging two or more images
+% (which are registered) of the same scene to get the more
+% informative image. Principal component analysis provides a
+% powerful tool for data analysis and pattern recognition which
+% is used in image processing as a technique for data
+% dimension reduction or their decorrelation of variables and
+% data compression as well. Principal component analysis is
+% appropriate when you have obtained measures on a number
+% of observed variables and wish to develop a smaller number
+% of artificial variables (called principal components) that will
+% account for most of the variance in the experimental
+% variables. PCA involves decorrelation and reduces the
+% number of components. The first principal component gives
+% description for as much of the variance in the data as
+% possible. Remaining components accounts for lesser
+% variance than first [7].
+
+% 4. PROPOSED METHODOLOGY
+% Steps of proposed algorithm are:
+% 1. Consider two partially blurred images which are
+% passed to the system. Read both images.
+% 2. Apply level shifting by 8 to them.
+% 3. Divide images into 8*8 blocks.
+% 4. Now apply DCT.
+
+function [ features ] = GetFramePCA_DCTFeatureVector(frame, xCropMaxRatio, yCropMaxRatio, debugMethod)
+    I = frame;
+    X = reshape(I,size(I,1)*size(I,2),3);
+    [evectors, score, evalues] = pca(X);
+    Itransformed = X*evectors;
+    
+    Ipc1 = reshape(Itransformed(:,1),size(I,1),size(I,2));
+%     Ipc2 = reshape(Itransformed(:,2),size(I,1),size(I,2));
+%     Ipc3 = reshape(Itransformed(:,3),size(I,1),size(I,2));
+
+    DCTImage = dct2(Ipc1);
+    
+    %calculate size of DCT crop
+    [JXSize, JYSize] = size(DCTImage);
+    xCropEnd = floor((JXSize/100) * xCropMaxRatio);
+    yCropEnd = floor((JYSize/100) * yCropMaxRatio);
+   
+    %Generates cropped DCT feature
+    clippedDCTImage = DCTImage(1:xCropEnd, 1:yCropEnd);
+           
+    if(strcmp(debugMethod, 'PCA-DCT'))
+        selection = zeros(size(DCTImage));
+        selection(1:xCropEnd, 1:yCropEnd) = 1;
+        reformedImage = DCTImage .* selection;
+       
+        figure(20)
+        p1 = subplot(2,2,1); subimage(idct2(DCTImage*255), [0 255]); title('Initial Image');
+        p2 = subplot(2,2,2); subimage(idct2(reformedImage*255), [0 255]); title('Reduced Image'); %*255 due to hsv converstion
+        p3 = subplot(2,2,3); subimage(DCTImage); title('DCT of Initial Image');
+        p4 = subplot(2,2,4); subimage(clippedDCTImage); title('clipped DCT');
+        pause(0.01);
+    end
+
+    features = clippedDCTImage;
+end
+ 
+function [RGB2] = getMouthBox(RGB, rescaleSize)
+    % Crop out general area of mouth in image
+    xStart = (300*rescaleSize);
+    yStart = (380*rescaleSize);
+    height = (150*rescaleSize);
+    width = (230*rescaleSize);
+    RGB = imcrop(RGB, [xStart yStart width height]);
+
+    % Increase saturation and decrease value of image
+    HSV = rgb2hsv(RGB);
+    HSV(:, :, 2) = HSV(:, :, 2) * 2;
+    HSV(:, :, 3) = HSV(:, :, 3) * 0.8;
+    HSV(HSV > 1) = 1;  % Limit values
+    RGB2 = hsv2rgb(HSV); %values are now from 0 - 1 not 1 - 255
+end
+
+function [croppedMouth, valXAxis, valYAxis, valAreas, valCentroidX, valCentroidY] = findMouthValues(img, rescaleSize, debugMethod) 
+
+    % Extract Green layer 
+    initialImage = img;
+    grayImg = img(:,:,2);
+
+    % Increase contrast and stretch out image
+    contrastedGrayImg = imadjust(grayImg, [0.2 0.6], [0 1]);
+    SE1 = strel('line', 3, 90);
+    SE2 = strel('line', 2, 0);
+    contrastedGrayImg = imerode(contrastedGrayImg,SE1);
+    contrastedGrayImg = imdilate(contrastedGrayImg,SE2);
+
+    % Create Binary matrix of mouth and remove any small noise
+    binaryImage =  contrastedGrayImg < 0.2 | contrastedGrayImg > 0.92;
+    binaryImage = medfilt2(binaryImage,[(40*rescaleSize) (40*rescaleSize)]);
+
+    % Dialate and fill the binary mask
+    dilatedBinaryImage = imfill(binaryImage, 'holes');
+    SE3 = strel('line', 10, 90);
+    SE4 = strel('line', 20, 0);
+    dilatedBinaryImage = imdilate(dilatedBinaryImage,SE3);
+    dilatedBinaryImage = imdilate(dilatedBinaryImage,SE4);
+
+    % Apply binary mask to inital image
+    r =  initialImage(:,:,1);
+    g =  initialImage(:,:,2);
+    b =  initialImage(:,:,3);
+    
+    r(dilatedBinaryImage == 0) = 0; 
+    g(dilatedBinaryImage == 0) = 0; 
+    b(dilatedBinaryImage == 0) = 0; 
+    
+    initialImage = cat(3,r,g,b);
+    
+    % Find blobs inside image and colour them
+    labeledImage = bwlabel(dilatedBinaryImage, 4);
+    coloredLabels = label2rgb (labeledImage, 'hsv', 'k', 'shuffle'); % pseudo random color labels
+
+    % Show initial image with boundries drawn around each blob
+    boundaries = bwboundaries(dilatedBinaryImage);
+   
+    
+    numberOfBoundaries = size(boundaries, 1);
+%     for k = 1 : numberOfBoundaries
+%         thisBoundary = boundaries{k};
+%         figure(8)
+%         
+%         warpedToPiBoundary = wrapTo2Pi(thisBoundary);
+%         
+%         hd = dfilt.fftfir(warpedToPiBoundary, 40);
+%         coeff = fftcoeffs(hd);
+%         
+%         plot(coeff, 'g', 'LineWidth', 1);
+%         pause()
+%     end
+    
+    values = regionprops('table',labeledImage,'Centroid','MajorAxisLength','MinorAxisLength', 'Area');
+    valXAxis = values.MajorAxisLength;
+    valYAxis = values.MinorAxisLength;
+    valAreas = values.Area;
+    valCentroidX = values.Centroid(1);
+    valCentroidY = values.Centroid(2);
+    croppedMouth = initialImage;
+    
+    if(strcmp(debugMethod, 'mouth'))
+        subplot(2, 3, 1), subimage(grayImg), title('origonal');    
+        subplot(2, 3, 2), subimage(contrastedGrayImg), title('enhanced');
+        subplot(2, 3, 3), subimage(initialImage), title('masked');
+        subplot(2, 3, 4), subimage(binaryImage), title('wiener'); 
+        subplot(2, 3, 5), subimage(dilatedBinaryImage), title('filled');
+        
+        subplot(2, 3, 6); imshow(grayImg); title('Outlines, from bwboundaries()', 'FontSize', 11); axis image; hold on;
+        for k = 1 : numberOfBoundaries
+            thisBoundary = boundaries{k};
+            plot(thisBoundary(:,2), thisBoundary(:,1), 'g', 'LineWidth', 2);
+        end
+        hold off;
+        pause(0.1)
+    end
+end
+
+function [frameFeaturesVector] = formatFrameFeaturesVector(DCTFeature, TheethValue, MouthWidth, MouthHeight, MouthArea, debugMethod)
+   
+    % Calculate and generate the empty frame features vector
+    [DCTrowCount, DCTrowLength] = size(DCTFeature);
+    DCTFeatureLength = (DCTrowCount * DCTrowLength);  %-1 for dct componant removal
+    TeethFeatureLength = 1;
+    MouthFeatureValueLength = 3; % height, width, areats
+    frameFeaturesVector = zeros(1, DCTFeatureLength + TeethFeatureLength + MouthFeatureValueLength);
+   
+    %Debugging Method
+    if(strcmp(debugMethod, 'feature'))
+        fprintf('DCT 2D has a row count %i.\n', DCTrowCount);
+        fprintf('DCT 2D has a row length %i.\n', DCTrowLength);
+        fprintf('length of 1D DCT is %i.\n', DCTFeatureLength);
+        fprintf('1D HTK feature length is %i.\n \n', length(frameFeaturesVector));
+        pause();
+    end
+   
+    % Populate DCT content into the featuresVector
+    for i = 1:DCTrowCount
+        endPoint = (i * DCTrowLength);
+        startPoint = endPoint - (DCTrowLength - 1);
+        frameFeaturesVector((startPoint:endPoint)) = DCTFeature(i,:);
+    end
+   
+    % Catch if any other blobs got through the filter
+    if(size(MouthWidth, 1)> 1) MouthWidth = MouthWidth(1);end
+    if(size(MouthHeight, 1)> 1) MouthHeight = MouthHeight(1); end
+    if(size(MouthArea, 1)> 1) MouthArea = MouthArea(1); end
+    
+    % Concat the values onto the end of the vector
+    frameFeaturesVector(1,DCTFeatureLength + 1) = TheethValue;
+    frameFeaturesVector(1,DCTFeatureLength + 2) = MouthWidth;
+    frameFeaturesVector(1,DCTFeatureLength + 3) = MouthHeight;
+    frameFeaturesVector(1,DCTFeatureLength + 4) = MouthArea;
+end
+ 
+function [featuresVector] = createEmptyFeaturesVector(video, nframes, xCropRatio, yCropRatio, imgRescale)
+    debugMethod = '';
+    sampleRGB = getMouthBox(read(video, 5), imgRescale);
+    featureLength = length(formatFrameFeaturesVector(GetDCTFeatureVector(sampleRGB, 1, xCropRatio, 1, yCropRatio, debugMethod), 0, 0, 0, 0, debugMethod));
+    featuresVector = zeros(featureLength, nframes);
+end
+
